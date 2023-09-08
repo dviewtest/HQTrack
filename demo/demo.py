@@ -22,10 +22,18 @@ from utils.checkpoint import load_network
 from networks.models import build_vos_model
 from utils.metric import pytorch_iou
 
+import argparse
+
+parser = argparse.ArgumentParser(description='Process some integers.')
+parser.add_argument('--video', dest='video_pth',
+                    required=True,
+                    help='Relative path from /HQTRACK/demo/your_video/ to video for tracking.')
+parser.add_argument('--SAM_prompt', '-p', dest='SAM_prompt', 
+                    required=False, default='box', choices=['box', 'point'],
+                    help='Specify which prompt type to use in object detection. Valid options are "box" and "point"')
+args = parser.parse_args()
+
 base_path = os.path.dirname(os.path.abspath(__file__))
-# video for test
-demo_video = 'bolt'
-img_files = sorted(glob.glob(join(base_path, demo_video, '*.jp*')))
 point_box_prompts=[]
 
 def seed_torch(seed=0):
@@ -77,7 +85,7 @@ class AOTTracker(object):
                                             aot_model=self.model,
                                             gpu_id=gpu_id,
                                             short_term_mem_skip=cfg.TEST_SHORT_TERM_MEM_SKIP,
-                                            long_term_mem_gap=cfg.TEST_LONG_TERM_MEM_GAP,
+                                            long_term_mem_gap=5, # TODO: was: cfg.TEST_LONG_TERM_MEM_GAP
                                             ))
             self.engine[-1].eval()
         self.transform = transforms.Compose([
@@ -142,12 +150,6 @@ class AOTTracker(object):
         conf = 0
 
         return mask, conf
-
-def read_img(img_path):
-    image = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    return image
-
 
 class HQTrack(object):
     def __init__(self, cfg, config, local_track=False,sam_refine=False,sam_refine_iou=0):
@@ -254,11 +256,19 @@ def OnMouse_point(event,x,y,flags,param):
         cv2.circle(img4show, (x0, y0), 4, (0, 255, 0), 6)
         img=img4show
 
+def gen_frames(vidcap):
+    success,image = vidcap.read()
+    while success:
+        yield image
+        success,image = vidcap.read()
+        if not success:
+            break
+        
 
 # SAM
 print("SAM init ...")
-model_type = 'vit_l'
-sam_checkpoint = os.path.join(base_path, '..', 'segment_anything_hq/pretrained_model/sam_hq_vit_l.pth')
+model_type = 'vit_h'
+sam_checkpoint = os.path.join(base_path, '..', 'segment_anything_hq/pretrained_model/sam_hq_vit_h.pth')
 output_mode = "binary_mask"
 sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
 sam.to(device=torch.device('cuda'))
@@ -267,7 +277,7 @@ mask_prompt = SamPredictor(sam)
 
 # HQTrack config
 # choose point or box prompt for SAM
-SAM_prompt = 'Point' #'Box
+SAM_prompt = args.SAM_prompt #'box', 'point'
 set_Tracker = 'HQTrack'
 sam_refine = True
 sam_refine_iou = 0.1
@@ -286,36 +296,50 @@ cfg = engine_config.EngineConfig(config['exp_name'], config['model'])
 cfg.TEST_CKPT_PATH = os.path.join(AOT_PATH, config['pretrain_model_path'])
 palette_template = Image.open(os.path.join(os.path.dirname(__file__), '..', 'my_tools/mask_palette.png')).getpalette()
 tracker = HQTrack(cfg, config, True, sam_refine,sam_refine_iou)
-save_dir = './output'
+save_dir = './your_video/'
+video_pth = "./your_video/" + args.video_pth
+vidcap = cv2.VideoCapture(video_pth)
 
-for idx,img_file in enumerate(img_files):
-    img = cv2.imread(img_file, cv2.IMREAD_UNCHANGED)
+fps = vidcap.get(cv2.CAP_PROP_FPS)
+width = int(vidcap.get(cv2.CAP_PROP_FRAME_WIDTH))
+height = int(vidcap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+fourcc = cv2.VideoWriter_fourcc(*'MP4V')
+video = cv2.VideoWriter(save_dir + video_pth.split('/')[-1].split('.')[0] + "_out.mp4", fourcc, fps, (width, height))
+
+for idx,img in enumerate(gen_frames(vidcap)):
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     img_ori=img.copy()
     # Select ROI
     if idx == 0:
         img4show = img.copy()
+        # The following code allows the user to manually input a prompt for the tracker
+        # This should be replaced with the human detection model
+        '''
         while (1):
             cv2.namedWindow("demo")
             cv2.imshow('demo', cv2.cvtColor(img4show, cv2.COLOR_RGB2BGR))
-            if SAM_prompt == 'Box':
+            if SAM_prompt == 'box':
                 OnMouse = OnMouse_box
-            elif SAM_prompt == 'Point':
+            elif SAM_prompt == 'point':
                 OnMouse = OnMouse_point
 
             cv2.setMouseCallback('demo', OnMouse)
             k = cv2.waitKey(1)
             if k == ord('r'):
                 break
+        '''
+        # Placeholder. TODO: Remove and replace with human detection model
+        point_box_prompts.append([100, 100, 100, 100])
+
         # point prompt
         masks_ls = []
         mask_2 = np.zeros_like(img[:,:,0])
         masks_ls.append(mask_2)
         for obj_idx, prompt in enumerate(point_box_prompts):
             mask_prompt.set_image(img_ori)
-            if SAM_prompt == 'Box':
+            if SAM_prompt == 'box':
                 masks_, iou_predictions, _ = mask_prompt.predict(box=np.array(prompt).astype(float))
-            elif SAM_prompt == 'Point':
+            elif SAM_prompt == 'point':
                 masks_, iou_predictions, _ = mask_prompt.predict(point_labels=np.asarray([1]), point_coords=np.asarray([prompt]))
             select_index = list(iou_predictions).index(max(iou_predictions))
             init_mask = masks_[select_index].astype(np.uint8)
@@ -341,8 +365,8 @@ for idx,img_file in enumerate(img_files):
             im_m = cv2.drawContours(img, contours, -1, cur_colors[idx], 2)
         im_m = im_m.clip(0, 255).astype(np.uint8)
         cv2.putText(im_m, 'Init', (35, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 5)
-        cv2.imshow('demo', im_m)
-        k = cv2.waitKey(1)
+        #cv2.imshow('demo', im_m)
+        #k = cv2.waitKey(1)
         # HQtrack init
         print('init target objects ...')
         tracker.initialize(img_ori, rs)
@@ -364,5 +388,9 @@ for idx,img_file in enumerate(img_files):
             contours, _ = cv2.findContours(m, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
             im_m = cv2.drawContours(img, contours, -1, cur_colors[idx], 2)
         im_m = im_m.clip(0, 255).astype(np.uint8)
-        save_path = os.path.join(save_dir, img_file.split('/')[-1])
-        cv2.imwrite(save_path, im_m)
+
+        video.write(im_m) 
+
+# Deallocating memories taken for window creation
+cv2.destroyAllWindows() 
+video.release()  # releasing the video generated

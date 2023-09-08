@@ -1,0 +1,13 @@
+tensorboardx==2.6.2
+easydict==1.10
+lmdb==1.4.1
+einops==0.6.1
+jpeg4py==0.1.4
+protobuf~=3.19.0
+timm==0.9.5
+tb-nightly==2.14.0a20230806
+scikit-image==0.21.0
+rsa==4.9
+six
+pillow==9.4.0
+pkgconfig

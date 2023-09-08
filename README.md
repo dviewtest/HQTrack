@@ -108,6 +108,44 @@ cp /path/to/our/trackers.ini /path/to/VOTS23_workspace/trackers.ini
 bash run.sh
 ```
 
+### RUN HQTrack using Docker
+
+The Docker container can either be pulled from Docker Hub or built locally.
+
+* To pull the container from [here](https://hub.docker.com/repository/docker/jjdc13/hqtrack/general) using the command:
+```
+docker pull jjdc13/hqtrack:latest
+```
+
+Building the container locally
+* Install CUDA runtime to allow the GPU(s) to be exposed during build time. This is required as the setup script requires nvcc and access to a GPU.
+```
+sudo yum install -y nvidia-container-toolkit
+```
+* Add the nvidia runtime to `/etc/docker/daemon.json` so that Docker can use the runtime
+```
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+```
+* The runtime can also be set as the default runtime by adding `"default-runtime": "nvidia",` to the `/etc/docker/daemon.json` file.
+
+* The container can then be built by running:
+```
+DOCKER_BUILDKIT=0 docker build . -t hqtrack
+```
+* DOCKER_BUILDKIT=0 must be included as currently (September 2023) if you have docker compose installed just modifying the existing runtime may not be enough and the GPU(s) may still not be exposed.
+
+Running the Docker container.
+* First copy the video you wish to run into `/HQTRACK/demo/your_video/`.
+* Next run the following command:
+```
+docker run --rm  --mount type=bind,source=$PWD/demo/your_video,target=/HQTRACK/demo/your_video hqtrack <video_name>
+```
+*  This will create a container, bind the directory `/HQTRACK/demo/your_video/` and run the HQTrack algorithm on `video_name`.
+* The output will be saved on the host machine as: `/HQTRACK/demo/your_video/<video_name>_out.mp4`.
+
+
+
 ## :book: Citation
 If you find HQTrack useful for you, please consider citing :mega:
 ```bibtex
